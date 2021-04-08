@@ -116,15 +116,17 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
         for i in range(len(ctx.array())):
             name = ctx.array(i).identifier().getText()
             token = ctx.array(i).identifier().IDENTIFIER().getPayload()
+            array_length = self.visit(ctx.array(i))
             if ctx.array_literal(i) != None:
-                expr_types = self.visit(ctx.array_literal(i))
+                expr_types, expr_values = self.visit(ctx.array_literal(i))
                 for j in range(len(expr_types)):
                     if expr_types[j] == Type.VOID  or expr_types[j] == Type.STRING:
                         print("ERROR: trying to initialize '" + expr_types[j] + "' expression to '" + tyype + "' array '" + name + "' at index " + str(j) + " of array literal in line " + str(token.line) + " and column " + str(token.column))
                     elif expr_types[j] == Type.FLOAT and tyype == Type.INT:
                         print("WARNING: possible loss of information initializing float expression to int array '" + name + "' at index " + str(j) + " of array literal in line " + str(token.line) + " and column " + str(token.column))
-            array_length = self.visit(ctx.array(i))
-            self.ids_defined[name] = tyype, array_length
+            else:
+                expr_values = [0 for i in range(array_length)]
+            self.ids_defined[name] = tyype, array_length,  expr_values
 
         return
 
@@ -132,12 +134,14 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     # Visit a parse tree produced by GrammarParser#variable_assignment.
     def visitVariable_assignment(self, ctx:GrammarParser.Variable_assignmentContext):
         op = ctx.OP.text
+        tyype = Type.VOID
+        value = None
         if ctx.identifier() != None:
             name = ctx.identifier().getText()
             token = ctx.identifier().IDENTIFIER().getPayload()
             #print("name", name, "line", str(token.line))
             try:
-                tyype, _,value = self.ids_defined[name]
+                tyype, _, value = self.ids_defined[name]
             except:
                 print("ERROR: undefined variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
                 return
@@ -150,36 +154,33 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 tyype, array_length, array_values = self.ids_defined[name]
             except:
                 print("ERROR: undefined array '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
-                
+                return
             array_index = self.visit(ctx.array())
-            if array_values != None:
-                value = array_values[array_index]
-            else:
-                value = None
-
 
         if ctx.expression() != None:
-            expr_type = self.visit(ctx.expression())
+            expr_type, expr_value = self.visit(ctx.expression())
             if expr_type == Type.VOID or expr_type == Type.STRING:
                 print("ERROR: trying to assign '" + expr_type + "' expression to variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
             elif expr_type == Type.FLOAT and tyype == Type.INT:
                 print("WARNING: possible loss of information assigning float expression to int variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
-
-
+        else:
+            expr_value = None
         if ctx.identifier() != None:
-            self.ids_defined[name] = tyype, -1
+            self.ids_defined[name] = tyype, -1, expr_value
         else: # array
-            self.ids_defined[name] = tyype, array_length
+            if array_index != None:
+                array_values[array_index] = expr_value if expr_value != None else array_values[array_index]
+            self.ids_defined[name] = tyype, array_length, array_values
 
         return
 
 
     # Visit a parse tree produced by GrammarParser#expression.
     def visitExpression(self, ctx:GrammarParser.ExpressionContext):
-        
+
         tyype = Type.VOID
         value = None
-        
+
         if len(ctx.expression()) == 0:
 
             if ctx.integer() != None:
@@ -202,7 +203,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 try:
                     #print('name', name)
                     tyype, _ , value= self.ids_defined[name]
-                    #print('alo',name,tyype,value)
+                    # print('alo',name,tyype,value)
                 except:
                     token = ctx.identifier().IDENTIFIER().getPayload()
                     print("ERROR: undefined variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
@@ -210,13 +211,14 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             elif ctx.array() != None:
                 name = ctx.array().identifier().getText()
                 tyype, array_length = 0, 0
+                array_index = self.visit(ctx.array())
                 try:
                     tyype, array_length, array_values = self.ids_defined[name]
                 except:
                     token = ctx.array().identifier().IDENTIFIER().getPayload()
                     print("ERROR: undefined array '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
-                self.visit(ctx.array())
-
+                if array_index != None:
+                    value = array_values[array_index]
                 #print("array index = " + str(array_index))
 
             elif ctx.function_call() != None:
@@ -228,9 +230,12 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 text = ctx.OP.text
                 token = ctx.OP
                 tyype, value = self.visit(ctx.expression(0))
-                #print('value', value)
                 if tyype == Type.VOID:
                     print("ERROR: unary operator '" + text + "' used on type void in line " + str(token.line) + " and column " + str(token.column))
+                elif text == '-' or text == '+':
+                    old_value = value
+                    value = eval("{} {}".format(text,value))
+                    print('line',str(token.line),'Expression',text, old_value,'Simplified to:',value)
 
             else: # parentheses
                 tyype, value = self.visit(ctx.expression(0))
@@ -241,7 +246,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             token = ctx.OP
             left, left_value = self.visit(ctx.expression(0))
             right, right_value = self.visit(ctx.expression(1))
-            
+
             #print('text',text,'line',str(token.line),'left type', left, 'left value',left_value,'right type', right, 'right value',right_value)
 
             if left == Type.VOID or right == Type.VOID:
@@ -255,14 +260,16 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             else:
                 tyype = Type.INT
 
-            if left_value != None and right_value != None and left != Type.STRING and right != Type.STRING and text != '>=' and text != '<=' and text != '==' and text != '!=':
+            #if left_value != None and right_value != None and left != Type.STRING and right != Type.STRING and text != '>=' and text != '<=' and text != '==' and text != '!=':
+            if left_value != None and right_value != None and left != Type.STRING and right != Type.STRING:
                 #print("aqui major")
                 value = eval("{} {} {}".format(left_value, text, right_value))
-                print('line',str(token.line),'Expression',left_value,text,right_value,'Simplified to:',value)
-                
+                print('line',str(token.line),'Expression',left_value,text,right_value,'Simplified to:',int(value) if isinstance(value, bool) else value)
+
                 if isinstance(value, bool):
                   value = int(value)
-                  
+
+
         #print('aqui',tyype,value)
         return tyype, value
 
@@ -273,7 +280,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
         if tyype != Type.INT:
             token = ctx.identifier().IDENTIFIER().getPayload()
             print("ERROR: array expression must be an integer, but it is " + str(tyype) + " in line " + str(token.line) + " and column " + str(token.column))
-        return value 
+        return value
 
 
     # Visit a parse tree produced by GrammarParser#array_literal.
