@@ -18,6 +18,7 @@ class Type:
 class GrammarCheckerVisitor(ParseTreeVisitor):
     ids_defined = {} # armazenar informações necessárias para cada identifier definido
     inside_what_function = ""
+    global_var = {} #armazena as variáveis globais
 
     # Visit a parse tree produced by GrammarParser#fiile.
     def visitFiile(self, ctx:GrammarParser.FiileContext):
@@ -93,6 +94,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     def visitVariable_definition(self, ctx:GrammarParser.Variable_definitionContext):
         tyype = ctx.tyype().getText()
         value = None
+        
 
         for i in range(len(ctx.identifier())):
             name = ctx.identifier(i).getText()
@@ -101,7 +103,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             if ctx.expression(i) != None:
                 #print('aqui ', name, ctx.expression(i).getText())
                 value = ctx.expression(i).getText()
-                expr_type, expr_value = self.visit(ctx.expression(i))
+                expr_type, expr_value,from_global = self.visit(ctx.expression(i))
                 if expr_type == Type.VOID or expr_type == Type.STRING:
                     print("ERROR: trying to assign '" + expr_type + "' expression to variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
                 elif expr_type == Type.FLOAT and tyype == Type.INT:
@@ -127,6 +129,11 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             else:
                 expr_values = [0 for i in range(array_length)]
             self.ids_defined[name] = tyype, array_length,  expr_values
+
+        if(self.inside_what_function == ''): # Define global variables
+            #print('name',name,'value',value,'inside',self.inside_what_function)
+            self.global_var[name] = name
+            #print(self.global_var[name])
 
         return
 
@@ -158,7 +165,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             array_index = self.visit(ctx.array())
 
         if ctx.expression() != None:
-            expr_type, expr_value = self.visit(ctx.expression())
+            expr_type, expr_value,from_global = self.visit(ctx.expression())
             if expr_type == Type.VOID or expr_type == Type.STRING:
                 print("ERROR: trying to assign '" + expr_type + "' expression to variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
             elif expr_type == Type.FLOAT and tyype == Type.INT:
@@ -203,10 +210,12 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 try:
                     #print('name', name)
                     tyype, _ , value= self.ids_defined[name]
-                    # print('alo',name,tyype,value)
+                    #print('alo',name,tyype,value,self.inside_what_function)
                 except:
                     token = ctx.identifier().IDENTIFIER().getPayload()
                     print("ERROR: undefined variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
+               
+                    
 
             elif ctx.array() != None:
                 name = ctx.array().identifier().getText()
@@ -229,25 +238,27 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             if ctx.OP != None: #unary operators
                 text = ctx.OP.text
                 token = ctx.OP
-                tyype, value = self.visit(ctx.expression(0))
+                tyype, value,from_global = self.visit(ctx.expression(0))
                 if tyype == Type.VOID:
                     print("ERROR: unary operator '" + text + "' used on type void in line " + str(token.line) + " and column " + str(token.column))
                 elif text == '-' or text == '+':
                     old_value = value
                     value = eval("{} {}".format(text,value))
-                    print('line',str(token.line),'Expression',text, old_value,'Simplified to:',value)
+                    if(from_global == False):
+                        print('line',str(token.line),'Expression',text, old_value,'Simplified to:',value)
+                    
 
             else: # parentheses
-                tyype, value = self.visit(ctx.expression(0))
+                tyype, value, from_global = self.visit(ctx.expression(0))
 
 
         elif len(ctx.expression()) == 2: # binary operators
             text = ctx.OP.text
             token = ctx.OP
-            left, left_value = self.visit(ctx.expression(0))
-            right, right_value = self.visit(ctx.expression(1))
+            left, left_value, left_from_global = self.visit(ctx.expression(0))
+            right, right_value, right_from_global = self.visit(ctx.expression(1))
 
-            #print('text',text,'line',str(token.line),'left type', left, 'left value',left_value,'right type', right, 'right value',right_value)
+           # print('text',text,'line',str(token.line),'left type', left, 'left value',left_value,'right type', right, 'right value',right_value,'lfg',left_from_global,'rfg',right_from_global) 
 
             if left == Type.VOID or right == Type.VOID:
                 print("ERROR: binary operator '" + text + "' used on type void in line " + str(token.line) + " and column " + str(token.column))
@@ -261,22 +272,32 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 tyype = Type.INT
 
             #if left_value != None and right_value != None and left != Type.STRING and right != Type.STRING and text != '>=' and text != '<=' and text != '==' and text != '!=':
-            if left_value != None and right_value != None and left != Type.STRING and right != Type.STRING:
+            if (left_value != None and right_value != None and left != Type.STRING and right != Type.STRING and not (left_from_global == True or right_from_global == True)):
                 #print("aqui major")
                 value = eval("{} {} {}".format(left_value, text, right_value))
-                print('line',str(token.line),'Expression',left_value,text,right_value,'Simplified to:',int(value) if isinstance(value, bool) else value)
+                
+                if isinstance(value, bool) and text  == '<':
+                    value = int(value)
+                else:
+                    print('line',str(token.line),'Expression',left_value,text,right_value,'Simplified to:',int(value) if isinstance(value, bool) else value)  
 
-                if isinstance(value, bool):
-                  value = int(value)
-
-
+               
+        try:
+            globalname = self.global_var[name]
+            #print('global name',globalname)
+            return tyype, value, True # Returning a boolean indicating if is a global variable or not
+        except:
+            return tyype, value, False
+        #print('name',name,'value',value,'inside',self.inside_what_function)
         #print('aqui',tyype,value)
-        return tyype, value
+        
+
+        
 
 
     # Visit a parse tree produced by GrammarParser#array.
     def visitArray(self, ctx:GrammarParser.ArrayContext):
-        tyype, value = self.visit(ctx.expression())
+        tyype, value, from_global = self.visit(ctx.expression())
         if tyype != Type.INT:
             token = ctx.identifier().IDENTIFIER().getPayload()
             print("ERROR: array expression must be an integer, but it is " + str(tyype) + " in line " + str(token.line) + " and column " + str(token.column))
@@ -288,7 +309,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
         types = []
         array_values = []
         for i in range(len(ctx.expression())):
-            tyype, value = self.visit(ctx.expression(i))
+            tyype, value, from_global = self.visit(ctx.expression(i))
             types += [tyype]
             array_values += [value]
         return types, array_values
@@ -308,7 +329,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             print("ERROR: undefined function '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
 
         for i in range(len(ctx.expression())):
-            arg_type, arg_value = self.visit(ctx.expression(i))
+            arg_type, arg_value, from_global = self.visit(ctx.expression(i))
             if i < len(args):
                 if arg_type == Type.VOID:
                     print("ERROR: void expression passed as parameter " + str(i) + " of function '" + name + "' in line " + str(token.line) + " and column " + str(token.column))
@@ -351,9 +372,3 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     # Visit a parse tree produced by GrammarParser#identifier.
     def visitIdentifier(self, ctx:GrammarParser.IdentifierContext):
         return self.visitChildren(ctx)
-
-
-    #del GrammarParser
-
-    #def aggregateResult(self, aggregate:Type, next_result:Type):
-        #return next_result if next_result != None else aggregate
