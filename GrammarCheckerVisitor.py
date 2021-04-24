@@ -49,6 +49,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     ids_defined = {} # armazenar informações necessárias para cada identifier definido
     inside_what_function = ""
     next_ir_register = 0
+    func_count = {}
 
     # Visit a parse tree produced by GrammarParser#fiile.
     def visitFiile(self, ctx:GrammarParser.FiileContext):
@@ -64,18 +65,19 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
         cte_value = None
         ir_register = None
         self.ids_defined[name] = tyype, params, cte_value, ir_register
+        self.func_count[name] = ir_register
         self.inside_what_function = name
         self.next_ir_register = len(params) + 1
         
         #print function definiton
-        
+
         print('define ' + str(llvm_type(tyype)) + ' @'+name +' (', end="")
         
         for i in range(len(params)):
             if(i < len(params)-1):
-                print( str(llvm_type(params[i]))+' @'+ str(i)+',', end="")
+                print( str(llvm_type(params[i]))+' %'+ str(i)+',', end="")
             else:
-                print( str(llvm_type(params[i]))+' @'+ str(i), end="")
+                print( str(llvm_type(params[i]))+' %'+ str(i), end="")
         print(') {')
         self.visit(ctx.body())
         print('}')
@@ -85,13 +87,21 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     # Visit a parse tree produced by GrammarParser#body.
     def visitBody(self, ctx:GrammarParser.BodyContext):
         return self.visitChildren(ctx)
-
+        
 
     # Visit a parse tree produced by GrammarParser#statement.
     def visitStatement(self, ctx:GrammarParser.StatementContext):
         if ctx.RETURN() != None:
+            #ret i32 %4
+
             token = ctx.RETURN().getPayload()
             function_type, params, cte_value, ir_register = self.ids_defined[self.inside_what_function]
+            
+            if (function_type == Type.VOID):
+                print('ret ' + str(llvm_type(function_type)))  
+            else:   
+                print('ret ' + str(llvm_type(function_type)) +' %'+ str(self.func_count[ self.inside_what_function])) 
+            
             if ctx.expression() != None:
                 tyype, cte_value, ir_register = self.visit(ctx.expression())
                 if function_type == Type.INT and tyype == Type.FLOAT:
@@ -163,9 +173,10 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                     if(cte_value != None):
                         print('store ' + str(llvm_type(expr_type)) + ' ' +str(float_to_hex(cte_value)) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
                     else:
-                        #%1 = call float @ResDiv(float 0x4079000000000000, float 0x4072c00000000000)
-                        print('store ' + str(llvm_type(expr_type)) + ' ' +str(ir_register) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
-                        #store float %1, float* %k, align 4
+                        if (self.func_count[self.inside_what_function] == None):
+                            self.func_count[self.inside_what_function] = 1
+                        print('store ' + str(llvm_type(expr_type)) + ' %' + str(self.func_count[self.inside_what_function]) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
+                       #store float %1, float* %k, align 4
                 else:
                      print('store ' + str(llvm_type(expr_type)) + ' ' + str(cte_value) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
 
@@ -327,10 +338,23 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
 
             elif ctx.function_call() != None:
                 tyype, cte_value, ir_register, name, params = self.visit(ctx.function_call())
+                ir_register = self.func_count[name]
+
+                if(self.func_count[name] == None):
+                    self.func_count[name] = 1
                 # params: pares = tipos, ímpares = valores
-                print('call',tyype + ' @'+name +" (",end="")
-                x = int(len(params)/2)
+                #print('ir '+ str(self.next_ir_register))
+
+                if(tyype == Type.VOID):
+                    print('call',tyype + ' @'+name +" (",end="")
                 
+                else:
+                    print('%'+ str(self.func_count[name]) +' = call',tyype + ' @'+name +" (",end="")
+                    self.func_count[name] = self.func_count[name] + 1
+
+                    #%1 = call float @ResDiv(float 0x4079000000000000, float 0x4072c00000000000)
+                x = int(len(params)/2)
+                    
                 for i in range(x):
                     j = 2*i
                     if(i < x-1):
@@ -344,6 +368,8 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                         else:
                             print( str(llvm_type(params[j]))+' '+ str(params[j+1]), end="")
                 print(')')
+
+                
 
                # print('aqui ',params)
                 #print('call', tyype +' @' + name , + str(llvm_type(tyype)) + ' @'+name +' (', end="")
@@ -494,6 +520,17 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             self.ids_defined[name] = tyype, -1, cte_value, ir_register
             #print('aqui 2 ',self.ids_defined[name])
             params += [tyype]
+            print('%'+name+ ' = alloca ' + str(llvm_type(tyype)) + ', align 4')               
+
+            if tyype == Type.FLOAT:
+                if (self.func_count[self.inside_what_function] == None):
+                    self.func_count[self.inside_what_function] = ir_register
+                print('store ' + str(llvm_type(tyype)) + ' %' + str(self.func_count[self.inside_what_function]) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
+                #store float %1, float* %k, align 4
+            else:
+                print('store ' + str(llvm_type(tyype)) + ' ' + str(cte_value) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
+
+
         return params
 
 
