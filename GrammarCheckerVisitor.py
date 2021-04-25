@@ -13,7 +13,7 @@ def printf(string, *args):
 
 import struct
 import math
-# Função utilizada para transformar um valor float para um valor hexadecimal 
+# Função utilizada para transformar um valor float para um valor hexadecimal
 # (o equivalente em hexadecimal dos valores dos bits de um float)
 def float_to_hex(f):
     float_hex = hex(struct.unpack('<Q', struct.pack('<d', f))[0])
@@ -23,7 +23,7 @@ def float_to_hex(f):
         else:
             float_hex = float_hex[:10] + hex(int(float_hex[10],16) + 1)[2] + "0000000"
 
-    else: 
+    else:
         float_hex = float_hex[:11] + "0000000"
     return float_hex
 
@@ -50,6 +50,8 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     inside_what_function = ""
     next_ir_register = 0
     func_count = {}
+    in_expr = []
+    global_var = []
 
     # Visit a parse tree produced by GrammarParser#fiile.
     def visitFiile(self, ctx:GrammarParser.FiileContext):
@@ -65,20 +67,21 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
         cte_value = None
         ir_register = None
         self.ids_defined[name] = tyype, params, cte_value, ir_register
-        self.func_count[name] = ir_register
+        self.func_count[name] = 0
         self.inside_what_function = name
         self.next_ir_register = len(params) + 1
-        
-        #print function definiton
 
+        #print function definiton
         print('define ' + str(llvm_type(tyype)) + ' @'+name +' (', end="")
-        
-        for i in range(len(params)):
+
+        for i, p in enumerate(params):
             if(i < len(params)-1):
-                print( str(llvm_type(params[i]))+' %'+ str(i)+',', end="")
+                print( str(llvm_type(p[0]))+' %'+ str(p[2])+',', end="")
             else:
-                print( str(llvm_type(params[i]))+' %'+ str(i), end="")
+                print( str(llvm_type(p[0]))+' %'+ str(p[2]), end="")
+            self.func_count[name] = i+1
         print(') {')
+        self.print_arg(params)
         self.visit(ctx.body())
         print('}')
         return
@@ -87,7 +90,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     # Visit a parse tree produced by GrammarParser#body.
     def visitBody(self, ctx:GrammarParser.BodyContext):
         return self.visitChildren(ctx)
-        
+
 
     # Visit a parse tree produced by GrammarParser#statement.
     def visitStatement(self, ctx:GrammarParser.StatementContext):
@@ -96,12 +99,8 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
 
             token = ctx.RETURN().getPayload()
             function_type, params, cte_value, ir_register = self.ids_defined[self.inside_what_function]
-            
-            if (function_type == Type.VOID):
-                print('ret ' + str(llvm_type(function_type)))  
-            else:   
-                print('ret ' + str(llvm_type(function_type)) +' %'+ str(self.func_count[ self.inside_what_function])) 
-            
+
+
             if ctx.expression() != None:
                 tyype, cte_value, ir_register = self.visit(ctx.expression())
                 if function_type == Type.INT and tyype == Type.FLOAT:
@@ -116,6 +115,13 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 err("ERROR: trying to return void expression from function '" + self.inside_what_function + "' in line " + str(token.line) + " and column " + str(token.column) + "\n")
                 exit(-1)
 
+            if (function_type == Type.VOID):
+                print('   ' +'ret ' + str(llvm_type(function_type)))
+            else:
+                if cte_value == None:
+                    print('   ' +'ret ' + str(llvm_type(function_type)) +' %'+ str(self.func_count[ self.inside_what_function]))
+                else:
+                    print('   ' +'ret ' + str(llvm_type(function_type)) +' '+ str(cte_value if tyype == Type.INT else float_to_hex(cte_value)))
 
 
         else:
@@ -159,26 +165,35 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
         ir_register = None
 
         # identifiers
+        is_global = self.inside_what_function==''
         for i in range(len(ctx.identifier())):
             name = ctx.identifier(i).getText()
             token = ctx.identifier(i).IDENTIFIER().getPayload()
-            
+            if is_global:
+                print(name)
+                self.global_var += [name]
+
 
             #%a = alloca i32, align 4
             if ctx.expression(i) != None:
+                if not is_global:
+                    print('   ' +'%'+name+ ' = alloca ' + str(llvm_type(tyype)) + ', align 4')
                 expr_type, cte_value, ir_register = self.visit(ctx.expression(i))
-                print('%'+name+ ' = alloca ' + str(llvm_type(expr_type)) + ', align 4')               
-                
+                if is_global:
+                    print('@'+name+'= global '+ str(llvm_type(expr_type))+' '+str(cte_value))
                 if expr_type == Type.FLOAT:
                     if(cte_value != None):
-                        print('store ' + str(llvm_type(expr_type)) + ' ' +str(float_to_hex(cte_value)) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
+                        if not is_global:
+                            print('   ' +'store ' + str(llvm_type(expr_type)) + ' ' +str(float_to_hex(cte_value)) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
                     else:
                         if (self.func_count[self.inside_what_function] == None):
                             self.func_count[self.inside_what_function] = 1
-                        print('store ' + str(llvm_type(expr_type)) + ' %' + str(self.func_count[self.inside_what_function]) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
+                        if not is_global:
+                            print('   ' +'store ' + str(llvm_type(expr_type)) + ' %' + str(self.func_count[self.inside_what_function]) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
                        #store float %1, float* %k, align 4
                 else:
-                     print('store ' + str(llvm_type(expr_type)) + ' ' + str(cte_value) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
+                    if not is_global:
+                        print('   ' +'store ' + str(llvm_type(expr_type)) + ' ' + str(cte_value) + ', '+ str(llvm_type(expr_type)) + '* %' + name+ ', align 4')
 
 
 
@@ -191,6 +206,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 # unitialized variables now get value 0
                 cte_value = 0
                 ir_register = None
+
             self.ids_defined[name] = tyype, -1, cte_value, ir_register # -1 means not a array, therefore no length here (vide 15 lines below)
 
         # arrays
@@ -212,6 +228,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 cte_values_array = [0] * array_length
                 ir_registers_array = [None] * array_length
             self.ids_defined[name] = tyype, array_length, cte_values_array, ir_registers_array
+        print(" ")
 
         return
 
@@ -261,6 +278,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 cte_value = None
         else:
             expr_type, expr_cte_value, expr_ir_register = self.visit(ctx.expression())
+            self.in_expr = []
             if expr_type == Type.VOID:
                 err("ERROR: trying to assign void expression to variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column) + "\n")
                 exit(-1)
@@ -269,15 +287,64 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
 
             if op == '=':
                 cte_value = expr_cte_value
-            if cte_value != None:
-                if op == '+=':
-                    cte_value += expr_cte_value
-                elif op == '-=':
+            elif op == '+=':
+                self.func_count[self.inside_what_function] += 1
+                ir_register = self.func_count[self.inside_what_function]
+                print('   ' +"%"+str(ir_register)+" = load "+str(llvm_type(tyype))+", "+str(llvm_type(tyype))+"* %"+str(name)+", align 4")
+                if tyype == Type.INT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = add "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+                elif tyype == Type.FLOAT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = fadd "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+
+                print('   ' +'store ' + str(llvm_type(expr_type)) + ' %' + str(ir_register) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
+                if cte_value != None and expr_cte_value != None:
+                        cte_value += expr_cte_value
+
+            elif op == '-=':
+                self.func_count[self.inside_what_function] += 1
+                ir_register = self.func_count[self.inside_what_function]
+                print('   ' +"%"+str(ir_register)+" = load "+str(llvm_type(tyype))+", "+str(llvm_type(tyype))+"* %"+str(name)+", align 4")
+                if tyype == Type.INT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = sub "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+                elif tyype == Type.FLOAT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = fsub "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+
+                print('   ' +'store ' + str(llvm_type(expr_type)) + ' %' + str(ir_register) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
+                if cte_value != None and expr_cte_value != None:
                     cte_value -= expr_cte_value
-                elif op == '*=':
+            elif op == '*=':
+                self.func_count[self.inside_what_function] += 1
+                ir_register = self.func_count[self.inside_what_function]
+                print('   ' +"%"+str(ir_register)+" = load "+str(llvm_type(tyype))+", "+str(llvm_type(tyype))+"* %"+str(name)+", align 4")
+                if tyype == Type.INT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = mul "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+                elif tyype == Type.FLOAT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = fmul "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+
+                print('   ' +'store ' + str(llvm_type(expr_type)) + ' %' + str(ir_register) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
+                if cte_value != None and expr_cte_value != None:
                     cte_value *= expr_cte_value
-                elif op == '/=':
+            elif op == '/=':
+                self.func_count[self.inside_what_function] += 1
+                ir_register = self.func_count[self.inside_what_function]
+                print('   ' +"%"+str(ir_register)+" = load "+str(llvm_type(tyype))+", "+str(llvm_type(tyype))+"* %"+str(name)+", align 4")
+                if tyype == Type.INT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = div "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+                elif tyype == Type.FLOAT:
+                    ir_register += 1
+                    print('   ' +"%"+str(ir_register)+" = fdiv "+str(llvm_type(tyype))+" %"+str(ir_register)+", "+('%'+str(expr_ir_register) if expr_ir_register != None else str(expr_cte_value)))
+
+                print('   ' +'store ' + str(llvm_type(expr_type)) + ' %' + str(ir_register) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
+                if cte_value != None and expr_cte_value != None:
                     cte_value /= expr_cte_value
+            self.func_count[self.inside_what_function] = ir_register
 
         if ctx.identifier() != None:
             self.ids_defined[name] = tyype, -1, cte_value, ir_register
@@ -286,6 +353,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 cte_values_array[array_index_cte] = cte_value
                 ir_registers_array[array_index_cte] = ir_register
             self.ids_defined[name] = tyype, array_length, cte_values_array, ir_registers_array
+        print(" ")
 
         return
 
@@ -312,11 +380,20 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             elif ctx.identifier() != None:
                 name = ctx.identifier().getText()
                 try:
-                    tyype, _, cte_value, ir_register = self.ids_defined[name]
+                    tyype, val, cte_value, ir_register = self.ids_defined[name]
                 except:
                     token = ctx.identifier().IDENTIFIER().getPayload()
                     err("ERROR: undefined variable '" + name + "' in line " + str(token.line) + " and column " + str(token.column) + "\n")
                     exit(-1)
+                if (not name in self.in_expr and cte_value == None) or name in self.global_var:
+                    self.func_count[self.inside_what_function] += 1
+                    print('   ' +"%"+str(self.func_count[self.inside_what_function])+" = load "+str(llvm_type(tyype))+", "+str(llvm_type(tyype))+"* %"+str(name)+", align 4")
+                    self.in_expr += [name]
+                    ir_register = self.func_count[self.inside_what_function]
+                    cte_value = None if name in self.global_var else cte_value
+                    self.ids_defined[name] = tyype, val, cte_value, ir_register
+                    #print(self.in_expr)
+
 
             elif ctx.array() != None:
                 name = ctx.array().identifier().getText()
@@ -338,7 +415,6 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
 
             elif ctx.function_call() != None:
                 tyype, cte_value, ir_register, name, params = self.visit(ctx.function_call())
-                ir_register = self.func_count[name]
 
                 if(self.func_count[name] == None):
                     self.func_count[name] = 1
@@ -346,30 +422,30 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                 #print('ir '+ str(self.next_ir_register))
 
                 if(tyype == Type.VOID):
-                    print('call',tyype + ' @'+name +" (",end="")
-                
+                    print('   ' +'call',tyype + ' @'+name +" (",end="")
+
                 else:
-                    print('%'+ str(self.func_count[name]) +' = call',tyype + ' @'+name +" (",end="")
+                    self.func_count[self.inside_what_function] += 1
+                    print('   ' +'%'+ str(self.func_count[self.inside_what_function]) +' = call',tyype + ' @'+name +" (",end="")
                     self.func_count[name] = self.func_count[name] + 1
+                    ir_register = self.func_count[self.inside_what_function]
 
                     #%1 = call float @ResDiv(float 0x4079000000000000, float 0x4072c00000000000)
-                x = int(len(params)/2)
-                    
-                for i in range(x):
-                    j = 2*i
-                    if(i < x-1):
-                        if(params[j] == Type.FLOAT):
-                            print( str(llvm_type(params[j]))+' '+ str(float_to_hex(params[j+1]))+', ', end="")
+
+                for i, p in enumerate(params):
+                    if(i < len(params)-1):
+                        if(p[0] == Type.FLOAT):
+                            print('   ' + str(llvm_type(p[0]))+' '+ str(float_to_hex(p[1]))+', ', end="")
                         else:
-                            print( str(llvm_type(params[j]))+' '+ str(params[j+1])+', ', end="")
+                            print('   ' + str(llvm_type(p[0]))+' '+ str(p[1])+', ', end="")
                     else:
-                        if(params[j] == Type.FLOAT):
-                            print( str(llvm_type(params[j]))+' '+ str(float_to_hex(params[j+1])), end="")
+                        if(p[0] == Type.FLOAT):
+                            print('   ' + str(llvm_type(p[0]))+' '+ str(float_to_hex(p[1])), end="")
                         else:
-                            print( str(llvm_type(params[j]))+' '+ str(params[j+1]), end="")
+                            print('   ' + str(llvm_type(p[0]))+' '+ str(p[1]), end="")
                 print(')')
 
-                
+
 
                # print('aqui ',params)
                 #print('call', tyype +' @' + name , + str(llvm_type(tyype)) + ' @'+name +' (', end="")
@@ -417,6 +493,42 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                     elif text == '-':
                         cte_value = left_cte_value - right_cte_value
                 else:
+                    if text == '*':
+                        if tyype == Type.INT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = mul "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
+                        elif tyype == Type.FLOAT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = fmul "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
+                    elif text == '/':
+                        if tyype == Type.INT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = div "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
+                        elif tyype == Type.FLOAT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = fdiv "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
+                    elif text == '+':
+                        if tyype == Type.INT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = add "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
+                        elif tyype == Type.FLOAT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = fadd "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
+                    elif text == '-':
+                        if tyype == Type.INT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = sub "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
+                        elif tyype == Type.FLOAT:
+                            self.func_count[self.inside_what_function] += 1
+                            ir_register = self.func_count[self.inside_what_function]
+                            print('   ' +"%"+str(ir_register)+" = fsub "+str(llvm_type(tyype))+" "+('%'+str(left_ir_register) if left_ir_register != None else str(left_cte_value if left_type == Type.INT else float_to_hex(left_cte_value)))+", "+('%'+str(right_ir_register) if right_ir_register != None else str(right_cte_value if right_type == Type.INT else float_to_hex(right_cte_value))))
                     cte_value = None
             else:
                 tyype = Type.INT
@@ -453,9 +565,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
                             cte_value = 0
                 else:
                     cte_value = None
-
         return tyype, cte_value, ir_register
-
 
     # Visit a parse tree produced by GrammarParser#array.
     def visitArray(self, ctx:GrammarParser.ArrayContext):
@@ -498,7 +608,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
         for i in range(len(ctx.expression())):
             arg_type, arg_cte_value, arg_ir_register = self.visit(ctx.expression(i))
             #print('args', arg_type, arg_cte_value)
-            args_array += [arg_type, arg_cte_value]
+            args_array.append([arg_type, arg_cte_value])
             if i < len(args):
                 if arg_type == Type.VOID:
                     err("ERROR: void expression passed as parameter " + str(i) + " of function '" + name + "' in line " + str(token.line) + " and column " + str(token.column) + "\n")
@@ -519,17 +629,7 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
             ir_register = i
             self.ids_defined[name] = tyype, -1, cte_value, ir_register
             #print('aqui 2 ',self.ids_defined[name])
-            params += [tyype]
-            print('%'+name+ ' = alloca ' + str(llvm_type(tyype)) + ', align 4')               
-
-            if tyype == Type.FLOAT:
-                if (self.func_count[self.inside_what_function] == None):
-                    self.func_count[self.inside_what_function] = ir_register
-                print('store ' + str(llvm_type(tyype)) + ' %' + str(self.func_count[self.inside_what_function]) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
-                #store float %1, float* %k, align 4
-            else:
-                print('store ' + str(llvm_type(tyype)) + ' ' + str(cte_value) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
-
+            params.append([tyype, name, ir_register])
 
         return params
 
@@ -558,5 +658,13 @@ class GrammarCheckerVisitor(ParseTreeVisitor):
     def visitIdentifier(self, ctx:GrammarParser.IdentifierContext):
         return self.visitChildren(ctx)
 
+    def print_arg(self, params):
+        cte_value = None
+        for p in params:
+            tyype, name, ir_register = p[0], p[1], p[2]
+
+            print('   ' +'%'+name+ ' = alloca ' + str(llvm_type(tyype)) + ', align 4')
+            print('   ' +'store ' + str(llvm_type(tyype)) + ' %' + str(ir_register) + ', '+ str(llvm_type(tyype)) + '* %' + name+ ', align 4')
+        print(" ")
 
 # warning: the use of uninitialized variables is not being warned!
